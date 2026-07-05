@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>IT Asset Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">P</span><div><strong>PaySys</strong><small>IT Asset Control</small></div></div>
+    <nav id="nav">
+      <button class="nav-item active" data-view="overview"><span>⌂</span> Overview</button>
+      <button class="nav-item" data-view="assets"><span>▦</span> Asset register</button>
+      <button class="nav-item" data-view="hiring"><span>◎</span> Hiring queue <b id="hireBadge">0</b></button>
+      <button class="nav-item" data-view="stock"><span>◇</span> Stock & alerts <b id="alertBadge">0</b></button>
+      <button class="nav-item" data-view="extensions"><span>☎</span> Extensions</button>
+    </nav>
+    <div class="side-foot"><span class="pulse"></span><div><strong>Workbook sync active</strong><small>Edits save to managed XLSX files</small></div></div>
+  </aside>
+
+  <main>
+    <header>
+      <button id="menuBtn" class="icon-btn menu-btn" aria-label="Toggle navigation">☰</button>
+      <div><p class="eyebrow">INVENTORY OPERATIONS</p><h1 id="pageTitle">Good morning, IT team</h1></div>
+      <div class="header-actions">
+        <button id="importBtn" class="utility-btn">⇧ Import</button>
+        <button id="exportBtn" class="utility-btn">⇩ Export</button>
+        <button id="addDataBtn" class="add-data-btn"><span>＋</span> Add data</button>
+        <button id="refreshBtn" class="icon-btn" title="Reload workbook data">↻</button>
+        <div class="avatar">IT</div>
+      </div>
+    </header>
+
+    <section class="search-panel">
+      <div class="search-box"><span>⌕</span><input id="globalSearch" type="search" placeholder="Find a user, serial number, asset tag or device…" autocomplete="off"><kbd>Ctrl K</kbd></div>
+      <div id="searchResults" class="search-results hidden"></div>
+    </section>
+
+    <section id="overviewView" class="view active">
+      <div class="section-heading"><div><p class="eyebrow">LIVE PULSE</p><h2>Inventory at a glance</h2></div><span id="lastUpdated" class="muted"></span></div>
+      <div id="kpiGrid" class="kpi-grid"></div>
+      <div class="overview-grid">
+        <article class="panel wide">
+          <div class="panel-head"><div><p class="eyebrow">FLEET MIX</p><h3>Laptops by state</h3></div><button class="text-btn" data-go="assets">Open register →</button></div>
+          <div id="fleetChart" class="bar-chart"></div>
+        </article>
+        <article class="panel attention">
+          <div class="panel-head"><div><p class="eyebrow">NEEDS ATTENTION</p><h3>Action centre</h3></div></div>
+          <div id="actionList" class="action-list"></div>
+        </article>
+      </div>
+      <article class="panel">
+        <div class="panel-head"><div><p class="eyebrow">RECENT / PRIORITY</p><h3>Operational watchlist</h3></div></div>
+        <div id="watchTable" class="table-wrap"></div>
+      </article>
+    </section>
+
+    <section id="assetsView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">SOURCE OF TRUTH</p><h2>Asset register</h2></div><span id="assetCount" class="count-pill"></span></div>
+      <div class="filters">
+        <select id="assetKind"><option value="">All asset types</option><option value="laptop">Laptops</option></select>
+        <select id="assetState"><option value="">All states</option></select>
+        <input id="assetFilterSearch" placeholder="Filter this table…">
+        <button id="clearFilters" class="secondary-btn">Clear</button>
+      </div>
+      <div id="laptopSubfilters" class="filters subfilters hidden">
+        <span class="filter-label">Laptop details</span>
+        <select id="laptopMake"><option value="">All makes</option></select>
+        <input id="laptopModel" placeholder="Model or specification…">
+        <select id="laptopYear"><option value="">All purchase years</option></select>
+      </div>
+      <article class="panel flush"><div id="assetTable" class="table-wrap"></div></article>
+    </section>
+
+    <section id="hiringView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">ONBOARDING READINESS</p><h2>Upcoming hires & laptop setup</h2><p class="muted">Move each hire from pending to configured, assign the laptop, and save directly to the workbook.</p></div></div>
+      <div id="hiringStats" class="mini-stats"></div>
+      <div class="filters">
+        <select id="hireStatus"><option value="">All workflow stages</option><option>Pending</option><option>Configuring</option><option>Ready</option><option>Done</option></select>
+        <input id="hireSearch" placeholder="Find hire or department…">
+      </div>
+      <article class="panel flush"><div id="hiringBoard" class="hire-board"></div></article>
+    </section>
+
+    <section id="stockView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">REPLENISHMENT</p><h2>Stock & low-level alerts</h2><p class="muted">Headphones, mice and in-stock laptops alert automatically below five units.</p></div></div>
+      <div id="stockCards" class="stock-grid"></div>
+      <article class="panel"><div class="panel-head"><div><p class="eyebrow">AVAILABLE LAPTOPS</p><h3>Ready stock</h3></div></div><div id="stockLaptopTable" class="table-wrap"></div></article>
+    </section>
+
+    <section id="extensionsView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">COMPANY DIRECTORY</p><h2>Extension finder</h2><p class="muted">Search by extension number, person, room, or department name.</p></div><span id="extensionCount" class="count-pill"></span></div>
+      <div class="filters"><input id="extensionSearch" placeholder="Search extension or name…"><button id="clearExtensionSearch" class="secondary-btn">Clear</button></div>
+      <article class="panel flush"><div id="extensionTable" class="table-wrap"></div></article>
+    </section>
+  </main>
+
+  <div id="scrim" class="scrim hidden"></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head"><div><p class="eyebrow" id="drawerEyebrow">ASSET DETAILS</p><h2 id="drawerTitle">Details</h2></div><button id="closeDrawer" class="icon-btn">×</button></div>
+    <div id="drawerBody"></div>
+  </aside>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
