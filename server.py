@@ -28,7 +28,14 @@ RUNTIME_ROOT = Path("/tmp/inventory-dashboard") if IS_VERCEL else ROOT / "data"
 DATA = RUNTIME_ROOT / "workbooks"
 BACKUPS = RUNTIME_ROOT / "backups"
 BLOB_PREFIX = "inventory-dashboard/workbooks"
-BLOB_ENABLED = IS_VERCEL and bool(os.environ.get("BLOB_READ_WRITE_TOKEN"))
+BLOB_AUTH = (
+    "oidc"
+    if os.environ.get("BLOB_STORE_ID") and os.environ.get("VERCEL_OIDC_TOKEN")
+    else "token"
+    if os.environ.get("BLOB_READ_WRITE_TOKEN")
+    else ""
+)
+BLOB_ENABLED = IS_VERCEL and bool(BLOB_AUTH)
 
 SOURCES = {
     "assigned": ("Inventory List/Assigned Laptops.xlsx", "laptop", "Assigned"),
@@ -86,7 +93,7 @@ def ensure_runtime_data():
         except Exception as exc:
             STORAGE_ERROR = f"Blob synchronization failed: {exc}"
     else:
-        STORAGE_ERROR = "Vercel Blob is not connected. Data is read-only and changes cannot persist."
+        STORAGE_ERROR = "Vercel Blob credentials are unavailable. Data is read-only and changes cannot persist."
     marker.write_text(datetime.now().isoformat(), encoding="utf-8")
 
 
@@ -644,7 +651,8 @@ class Handler(SimpleHTTPRequestHandler):
         if route == "/api/health":
             self.send_json({
                 "ok": True, "environment": "vercel" if IS_VERCEL else "local",
-                "blobConnected": BLOB_ENABLED, "storageWarning": STORAGE_ERROR,
+                "blobConnected": BLOB_ENABLED, "blobAuth": BLOB_AUTH or None,
+                "storageWarning": STORAGE_ERROR,
                 "sources": len(SOURCES),
             })
             return

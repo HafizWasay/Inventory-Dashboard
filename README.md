@@ -14,9 +14,12 @@ The project includes a Vercel Python Function, static rewrites, Python dependenc
 
 1. In the Vercel project, open **Storage**.
 2. Create a **private Blob store** and connect it to Production and Preview.
-3. Confirm that Vercel created the `BLOB_READ_WRITE_TOKEN` environment variable.
+3. Confirm that Vercel created `BLOB_STORE_ID`; new connections use rotating
+   OIDC credentials automatically. Older stores may use `BLOB_READ_WRITE_TOKEN`.
 4. Redeploy the latest commit.
-5. Open `/api/health` on the deployed domain. It should report `"environment": "vercel"` and `"blobConnected": true`.
+5. Open `/api/health` on the deployed domain. It should report `"environment":
+   "vercel"`, `"blobConnected": true`, and `"blobAuth": "oidc"` (or `"token"`
+   for an older store).
 
 On the first request, the bundled workbooks seed the Blob store automatically. Future edits, moves, deletes, imports, and backups are written to Blob storage, while local development continues to use `data/workbooks`.
 
