@@ -13,15 +13,31 @@ const canonicalMake=v=>{
   if(s==="macbook")return"MacBook";if(s==="thinkpad")return"ThinkPad";return title(String(v||"").trim());
 };
 
+async function apiRequest(url,options){
+  const res=await fetch(url,options);
+  const contentType=res.headers.get("content-type")||"";
+  let data;
+  if(contentType.includes("application/json")){
+    data=await res.json();
+  }else{
+    const text=(await res.text()).trim();
+    data={error:res.status===404
+      ?"The dashboard API was not found. Redeploy the latest project to Vercel."
+      :(text.slice(0,180)||`Server returned ${res.status}`)};
+  }
+  if(!res.ok)throw Error(data.error||`Request failed (${res.status})`);
+  return data;
+}
+
 async function load(){
   $("#refreshBtn").classList.add("spin");
   try{
-    const res=await fetch("/api/data"); const data=await res.json();
-    if(!res.ok)throw Error(data.error||"Unable to load");
+    const data=await apiRequest("/api/data");
     state.records=data.records;
+    if(data.storage?.warning){$("#storageBanner").textContent=data.storage.warning;$("#storageBanner").classList.remove("hidden")}else{$("#storageBanner").classList.add("hidden")}
     $("#lastUpdated").textContent=`Workbook refresh · ${new Date(data.updatedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}`;
     renderAll(); toast("Workbook data refreshed");
-  }catch(e){toast(e.message,true)}
+  }catch(e){$("#storageBanner").textContent=`Data could not be loaded: ${e.message}`;$("#storageBanner").classList.remove("hidden");toast(e.message,true)}
   $("#refreshBtn").classList.remove("spin");
 }
 
@@ -173,12 +189,12 @@ function renderMoveFields(){
 async function submitMove(form){
   const values=Object.fromEntries(new FormData(form).entries()),destination=$("#moveDestination").value,btn=form.querySelector(".primary-btn");
   btn.disabled=true;btn.textContent="Moving…";
-  try{const res=await fetch("/api/move",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:state.drawer.source,row:state.drawer.row,destination,values})});const data=await res.json();if(!res.ok)throw Error(data.error||"Move failed");closeDrawer();await load();toast(`Laptop moved to ${lifecycleLabels[destination]}`)}
+  try{await apiRequest("/api/move",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:state.drawer.source,row:state.drawer.row,destination,values})});closeDrawer();await load();toast(`Laptop moved to ${lifecycleLabels[destination]}`)}
   catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Try again"}
 }
 async function deleteCurrentRecord(){
   const r=state.drawer;if(!confirm(`Delete ${r.name||r.assetTag||"this record"}? A workbook backup will be created first.`))return;
-  try{const res=await fetch("/api/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:r.source,row:r.row})});const data=await res.json();if(!res.ok)throw Error(data.error||"Delete failed");closeDrawer();await load();toast("Record deleted")}
+  try{await apiRequest("/api/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:r.source,row:r.row})});closeDrawer();await load();toast("Record deleted")}
   catch(e){toast(e.message,true)}
 }
 function openMultiReview(){
@@ -212,7 +228,7 @@ function openAddData(){
 async function submitAddForm(form){
   const schema=addSchemas[$("#addRecordType").value],values=Object.fromEntries(new FormData(form).entries());
   const btn=form.querySelector(".primary-btn");btn.disabled=true;btn.textContent="Adding…";
-  try{const res=await fetch("/api/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:schema.source,values})});const data=await res.json();if(!res.ok)throw Error(data.error||"Unable to add record");closeDrawer();await load();toast(`Added to ${schema.label.toLowerCase()} workbook`)}
+  try{await apiRequest("/api/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:schema.source,values})});closeDrawer();await load();toast(`Added to ${schema.label.toLowerCase()} workbook`)}
   catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Try again"}
 }
 const importDatasets={
@@ -233,11 +249,11 @@ function fileAsBase64(file){
 }
 async function previewImport(form){
   const file=$("#importFile").files[0];if(!file)return;
+  if(location.hostname.endsWith("vercel.app")&&file.size>3*1024*1024){toast("Use an Excel or CSV file smaller than 3 MB on Vercel",true);return}
   const btn=form.querySelector(".primary-btn");btn.disabled=true;btn.textContent="Reading…";
   try{
     const content=await fileAsBase64(file),source=$("#importSource").value;
-    const res=await fetch("/api/import/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source,filename:file.name,content})});
-    const data=await res.json();if(!res.ok)throw Error(data.error||"Preview failed");
+    const data=await apiRequest("/api/import/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source,filename:file.name,content})});
     state.importFile={filename:file.name,content,source};state.importPreview=data;renderImportMapping();
   }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Preview columns"}
 }
@@ -260,8 +276,8 @@ async function commitImport(form){
   const mapping={};form.querySelectorAll(".map-select").forEach(s=>{if(s.value)mapping[s.dataset.target]=s.value});
   const btn=form.querySelector(".primary-btn");btn.disabled=true;btn.textContent="Importing…";
   try{
-    const res=await fetch("/api/import/commit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...state.importFile,mapping,mode})});
-    const data=await res.json();if(!res.ok)throw Error(data.error||"Import failed");closeDrawer();await load();toast(`${data.imported} rows imported successfully`);
+    const data=await apiRequest("/api/import/commit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...state.importFile,mapping,mode})});
+    closeDrawer();await load();toast(`${data.imported} rows imported successfully`);
   }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Try import again"}
 }
 function openExport(){
@@ -285,7 +301,7 @@ function editForm(r){
 function closeDrawer(){$("#drawer").classList.remove("open");$("#drawer").setAttribute("aria-hidden","true");$("#scrim").classList.add("hidden");state.drawer=null}
 async function saveForm(form){
   const updates=Object.fromEntries(new FormData(form).entries());const btn=form.querySelector(".primary-btn");btn.disabled=true;btn.textContent="Saving…";
-  try{const res=await fetch("/api/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:state.drawer.source,row:state.drawer.row,updates})});const data=await res.json();if(!res.ok)throw Error(data.error||"Save failed");closeDrawer();await load();toast("Saved to workbook");}
+  try{await apiRequest("/api/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:state.drawer.source,row:state.drawer.row,updates})});closeDrawer();await load();toast("Saved to workbook");}
   catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Try again"}
 }
 function globalSearch(){

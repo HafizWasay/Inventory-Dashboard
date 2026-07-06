@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import asyncio
 import base64
 import io
 import json
@@ -21,8 +22,13 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
-DATA = ROOT / "data" / "workbooks"
-BACKUPS = ROOT / "data" / "backups"
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+SOURCE_DATA = ROOT / "data" / "workbooks"
+RUNTIME_ROOT = Path("/tmp/inventory-dashboard") if IS_VERCEL else ROOT / "data"
+DATA = RUNTIME_ROOT / "workbooks"
+BACKUPS = RUNTIME_ROOT / "backups"
+BLOB_PREFIX = "inventory-dashboard/workbooks"
+BLOB_ENABLED = IS_VERCEL and bool(os.environ.get("BLOB_READ_WRITE_TOKEN"))
 
 SOURCES = {
     "assigned": ("Inventory List/Assigned Laptops.xlsx", "laptop", "Assigned"),
@@ -35,6 +41,76 @@ SOURCES = {
     "hiring": ("Upcoming Hiring/Upcoming Hiring Sheet.xlsx", "hire", "Hiring"),
     "extensions": ("Extension List/extensions.xlsx", "extension", "Directory"),
 }
+
+STORAGE_ERROR = ""
+
+
+async def _blob_sync_async():
+    from vercel.blob import AsyncBlobClient, BlobNotFoundError
+    async with AsyncBlobClient() as client:
+        for rel_path, _, _ in SOURCES.values():
+            rel = Path(rel_path)
+            local_path = DATA / rel
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            pathname = f"{BLOB_PREFIX}/{rel.as_posix()}"
+            try:
+                result = await client.get(pathname, access="private")
+            except BlobNotFoundError:
+                result = None
+            if result and result.status_code == 200:
+                local_path.write_bytes(result.content)
+            elif (SOURCE_DATA / rel).exists():
+                seed = (SOURCE_DATA / rel).read_bytes()
+                local_path.write_bytes(seed)
+                await client.put(pathname, seed, access="private", overwrite=True)
+
+
+def ensure_runtime_data():
+    global STORAGE_ERROR
+    if not IS_VERCEL:
+        return
+    marker = RUNTIME_ROOT / ".synced"
+    if marker.exists():
+        return
+    DATA.mkdir(parents=True, exist_ok=True)
+    for rel_path, _, _ in SOURCES.values():
+        source = SOURCE_DATA / rel_path
+        target = DATA / rel_path
+        if source.exists() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    if BLOB_ENABLED:
+        try:
+            asyncio.run(_blob_sync_async())
+            STORAGE_ERROR = ""
+        except Exception as exc:
+            STORAGE_ERROR = f"Blob synchronization failed: {exc}"
+    else:
+        STORAGE_ERROR = "Vercel Blob is not connected. Data is read-only and changes cannot persist."
+    marker.write_text(datetime.now().isoformat(), encoding="utf-8")
+
+
+async def _blob_put_async(path, pathname):
+    from vercel.blob import AsyncBlobClient
+    async with AsyncBlobClient() as client:
+        await client.put(
+            pathname, path.read_bytes(), access="private", overwrite=True,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+
+def persist_workbook(path):
+    if not IS_VERCEL:
+        return
+    if not BLOB_ENABLED:
+        raise ValueError("Vercel Blob is not connected. Create a private Blob store before editing deployed data.")
+    rel = path.relative_to(DATA).as_posix()
+    asyncio.run(_blob_put_async(path, f"{BLOB_PREFIX}/{rel}"))
+
+
+def persist_backup(path):
+    if IS_VERCEL and BLOB_ENABLED:
+        asyncio.run(_blob_put_async(path, f"inventory-dashboard/backups/{path.name}"))
 
 IMPORT_FIELDS = {
     "assigned": [
@@ -108,8 +184,10 @@ def import_rows(filename, content_b64):
         content = base64.b64decode(content_b64, validate=True)
     except Exception as exc:
         raise ValueError("The uploaded file could not be read") from exc
-    if len(content) > 15 * 1024 * 1024:
-        raise ValueError("Import files must be 15 MB or smaller")
+    max_bytes = 3 * 1024 * 1024 if IS_VERCEL else 15 * 1024 * 1024
+    if len(content) > max_bytes:
+        limit = 3 if IS_VERCEL else 15
+        raise ValueError(f"Import files must be {limit} MB or smaller in this environment")
     suffix = Path(filename).suffix.lower()
     if suffix == ".csv":
         text = content.decode("utf-8-sig", errors="replace")
@@ -230,7 +308,9 @@ def all_data():
 def backup(path):
     BACKUPS.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    shutil.copy2(path, BACKUPS / f"{path.stem}-{stamp}{path.suffix}")
+    backup_path = BACKUPS / f"{path.stem}-{stamp}{path.suffix}"
+    shutil.copy2(path, backup_path)
+    persist_backup(backup_path)
 
 
 def update_record(payload):
@@ -261,6 +341,7 @@ def update_record(payload):
     wb.save(temp)
     wb.close()
     os.replace(temp, path)
+    persist_workbook(path)
     return {"ok": True, "record": next((r for r in read_xlsx(source_id, rel_path, SOURCES[source_id][1], SOURCES[source_id][2]) if r["row"] == row), None)}
 
 
@@ -282,6 +363,7 @@ def add_record(payload):
         wb.save(temp)
         wb.close()
         os.replace(temp, path)
+        persist_workbook(path)
         record = next((r for r in read_xlsx(source_id, rel_path, kind, lifecycle) if r["row"] == next_row), None)
         return {"ok": True, "record": record}
     headers = {clean(cell.value): idx for idx, cell in enumerate(ws[1], start=1) if clean(cell.value)}
@@ -303,6 +385,7 @@ def add_record(payload):
     wb.save(temp)
     wb.close()
     os.replace(temp, path)
+    persist_workbook(path)
     record = next((r for r in read_xlsx(source_id, rel_path, kind, lifecycle) if r["row"] == next_row), None)
     return {"ok": True, "record": record}
 
@@ -342,6 +425,7 @@ def delete_record(payload):
     wb.save(temp)
     wb.close()
     os.replace(temp, path)
+    persist_workbook(path)
     return {"ok": True, "deleted": True}
 
 
@@ -423,6 +507,8 @@ def move_record(payload):
     destination_wb.close(); source_wb.close()
     os.replace(destination_temp, destination_path)
     os.replace(source_temp, source_path)
+    persist_workbook(destination_path)
+    persist_workbook(source_path)
     return {"ok": True, "moved": True, "destination": destination, "row": destination_row}
 
 
@@ -478,6 +564,7 @@ def import_commit(payload):
     wb.save(temp)
     wb.close()
     os.replace(temp, path)
+    persist_workbook(path)
     return {"ok": True, "imported": len(rows), "mode": mode, "dataset": source_id}
 
 
@@ -517,6 +604,13 @@ def export_csv(source_id):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def api_path(self):
+        parsed = urlparse(self.path)
+        routed = parse_qs(parsed.query).get("route", [""])[0]
+        if routed:
+            return f"/api/{routed.lstrip('/')}"
+        return parsed.path
+
     def translate_path(self, path):
         requested = unquote(urlparse(path).path).lstrip("/") or "index.html"
         target = (PUBLIC / requested).resolve()
@@ -534,14 +628,27 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed_url = urlparse(self.path)
-        if parsed_url.path == "/api/data":
+        route = self.api_path()
+        if route.startswith("/api/"):
+            ensure_runtime_data()
+        if route == "/api/data":
             try:
                 records = all_data()
-                self.send_json({"records": records, "updatedAt": datetime.now().isoformat(timespec="seconds")})
+                self.send_json({
+                    "records": records, "updatedAt": datetime.now().isoformat(timespec="seconds"),
+                    "storage": {"persistent": not IS_VERCEL or BLOB_ENABLED, "warning": STORAGE_ERROR},
+                })
             except Exception as exc:
                 self.send_json({"error": str(exc)}, 500)
             return
-        if parsed_url.path == "/api/export":
+        if route == "/api/health":
+            self.send_json({
+                "ok": True, "environment": "vercel" if IS_VERCEL else "local",
+                "blobConnected": BLOB_ENABLED, "storageWarning": STORAGE_ERROR,
+                "sources": len(SOURCES),
+            })
+            return
+        if route == "/api/export":
             try:
                 source_id = parse_qs(parsed_url.query).get("source", ["all"])[0]
                 filename, content = export_csv(source_id)
@@ -557,12 +664,16 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
-        route = urlparse(self.path).path
+        route = self.api_path()
+        ensure_runtime_data()
         if route not in {"/api/update", "/api/add", "/api/delete", "/api/move", "/api/import/preview", "/api/import/commit"}:
             self.send_json({"error": "Not found"}, 404)
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if IS_VERCEL and length > 4_400_000:
+                self.send_json({"error": "This import is too large for Vercel. Use a file smaller than 3 MB."}, 413)
+                return
             payload = json.loads(self.rfile.read(length) or b"{}")
             if route == "/api/add":
                 result = add_record(payload)
